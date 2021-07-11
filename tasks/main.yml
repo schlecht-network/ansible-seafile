@@ -1,0 +1,375 @@
+---
+- name: Install apt deps
+  become: true
+  apt:
+    name:
+      - python3
+      - libpython3.8
+      - python3-setuptools
+      - python3-pil
+      - python3-ldap
+      - python3-urllib3
+      - ffmpeg
+      - python3-pip
+      - python3-mysqldb
+      - python3-memcache
+      - python3-requests
+      - memcached
+      - libmemcached-dev
+      - mariadb-server
+      - nginx
+      - firewalld
+      - acl
+    state: latest
+
+- name: Install pip deps
+  become: true
+  pip:
+    name: ['Pillow', 'pylibmc', 'captcha', 'jinja2', 'sqlalchemy', 'psd-tools', 'django-pylibmc', 'django-simple-captcha', 'python3-ldap']
+
+- name: Make shure firewalld is started
+  become: true
+  systemd:
+    name: firewalld
+    state: started
+    enabled: yes
+
+- name: Make shure mariadb is started
+  become: true
+  systemd:
+    name: mariadb
+    state: started
+    enabled: yes
+
+- name: Make shure nginx is started
+  become: true
+  systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+- name: Make shure memcached is started
+  become: true
+  systemd:
+    name: memcached
+    state: started
+    enabled: yes
+
+- name: Check if mysql root password has already been set
+  stat:
+    path: "/etc/mysql/myrootpw_set_done"
+  register: myrootpw_set_done
+
+- name: Set mysql root password
+  become: true
+  mysql_user: 
+    user: root 
+    password: "{{ mysql_root_password }}" 
+    host: localhost
+  no_log: true
+  when: not myrootpw_set_done.stat.exists
+
+- name: Create rootpw_set_done file
+  become: true
+  file:
+    path: "/etc/mysql/myrootpw_set_done"
+    state: touch
+    mode: '0644'
+  when: not myrootpw_set_done.stat.exists
+
+- name: Delete anonymous MySQL server user
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    user: ""
+    state: absent
+  no_log: true
+
+- name: Secure MySQL root remote access IPv6
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    user: root
+    password: "{{ mysql_root_password }}"
+    host: "::1"
+  no_log: true
+
+- name: Secure MySQL root remote access IPv4
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    user: root
+    password: "{{ mysql_root_password }}"
+    host: "127.0.0.1"
+  no_log: true
+
+- name: Secure MySQL root remote access localhost
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    user: root
+    password: "{{ mysql_root_password }}"
+    host: "localhost"
+  no_log: true
+
+- name: Remove MySQL test db
+  mysql_db:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    name: test
+    state: absent
+  no_log: true
+
+- name: Create seafile dbs
+  mysql_db:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    name:
+      - ccnet-db
+      - seafile-db
+      - seahub-db
+    state: present
+    encoding: utf8
+  no_log: true
+
+- name: Create seafile user
+  mysql_user:
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    user: seafile
+    password: "{{ seafileuser_db_pw }}"
+    priv: 'ccnet-db.*:ALL/seafile-db.*:ALL/seahub-db.*:ALL'
+    state: present
+  no_log: true
+
+- name: Add seafile user to system
+  become: true
+  user:
+    name: seafile
+    shell: /bin/bash
+    create_home: yes
+
+- name: Create /opt/seafile
+  become: true
+  file:
+    path: /opt/seafile
+    state: directory
+    owner: seafile
+    group: seafile
+
+- name: Download seafile archive
+  become_user: seafile
+  become: true
+  get_url:
+    url: "{{ seafile_download_url }}"
+    dest: /tmp/seafile.tar.gz
+
+- name: Extract seafile
+  become_user: seafile
+  become: true
+  unarchive:
+    src: /tmp/seafile.tar.gz
+    dest: /opt/seafile
+    remote_src: true
+    owner: seafile
+    group: seafile
+
+- name: Check if seafile setup has gone through
+  stat:
+    path: "/opt/seafile/seafile_setup_done"
+  register: seafile_setup_done
+
+- name: Setup seafile
+  become_user: seafile
+  become: true
+  shell: "/opt/seafile/seafile-server-{{ seafile_version }}/setup-seafile-mysql.sh auto -n '{{ fqdn }}' -i '{{ fqdn }}' -e 1 -u seafile -w '{{ seafileuser_db_pw }}' -c ccnet-db -s seafile-db -b seahub-db"
+  when: not seafile_setup_done.stat.exists
+  no_log: true
+
+- name: Create seafile_setup_done file
+  become: true
+  file:
+    path: "/opt/seafile/seafile_setup_done"
+    state: touch
+    mode: '0644'
+  when: not seafile_setup_done.stat.exists
+
+- name: Check if seahub firststart has already gone through
+  stat:
+    path: "/opt/seafile/seahub_firststart_done"
+  register: seahub_firststart_done
+
+- name: Make check_init_admin.py private
+  become_user: seafile
+  become: true
+  file:
+    path: "/opt/seafile/seafile-server-{{ seafile_version }}/check_init_admin.py"
+    mode: '0640'
+
+- name: Set Admin email
+  become_user: seafile
+  become: true
+  replace:
+    path: "/opt/seafile/seafile-server-{{ seafile_version }}/check_init_admin.py"
+    regexp: '= ask_admin_email\x28\x29'
+    replace: "= \"{{ seafile_admin_email }}\""
+
+- name: Set Admin PW
+  become_user: seafile
+  become: true
+  replace:
+    path: "/opt/seafile/seafile-server-{{ seafile_version }}/check_init_admin.py"
+    regexp: '= ask_admin_password\x28\x29'
+    replace: "= \"{{ seafile_admin_pw }}\""
+  no_log: true
+
+- name: First start seafile
+  become_user: seafile
+  become: true
+  shell: "/opt/seafile/seafile-server-{{ seafile_version }}/seafile.sh start"
+  when: not seahub_firststart_done.stat.exists
+
+- name: First start seahub
+  become_user: seafile
+  become: true
+  shell: "/opt/seafile/seafile-server-{{ seafile_version }}/seahub.sh start"
+  when: not seahub_firststart_done.stat.exists
+
+- name: Stop seafile
+  become_user: seafile
+  become: true
+  shell: "/opt/seafile/seafile-server-{{ seafile_version }}/seafile.sh stop"
+  when: not seahub_firststart_done.stat.exists
+
+- name: Stop seahub
+  become_user: seafile
+  become: true
+  shell: "/opt/seafile/seafile-server-{{ seafile_version }}/seahub.sh stop"
+  when: not seahub_firststart_done.stat.exists
+
+- name: Create seahub_firststart_done file
+  become: true
+  file:
+    path: "/opt/seafile/seahub_firststart_done"
+    state: touch
+    mode: '0644'
+  when: not seahub_firststart_done.stat.exists
+
+- name: Edit ccnet.conf
+  become_user: seafile
+  become: true
+  template:
+    src: ccnet.conf.j2
+    dest: /opt/seafile/conf/ccnet.conf
+    mode: 0660
+  no_log: true
+
+- name: Edit seafile.conf
+  become_user: seafile
+  become: true
+  template:
+    src: seafile.conf.j2
+    dest: /opt/seafile/conf/seafile.conf
+    mode: 0660
+  no_log: true
+
+- name: Add FILE_SERVER_ROOT to seahub_settings.py
+  become_user: seafile
+  become: true
+  lineinfile:
+    path: /opt/seafile/conf/seahub_settings.py
+    regexp: '^FILE_SERVER_ROOT ='
+    line: FILE_SERVER_ROOT = 'https://{{ fqdn }}/seafhttp'
+    insertafter: '}'
+
+- name: Add ENABLE_TWO_FACTOR_AUTH to seahub_settings.py
+  become_user: seafile
+  become: true
+  lineinfile:
+    path: /opt/seafile/conf/seahub_settings.py
+    regexp: '^ENABLE_TWO_FACTOR_AUTH ='
+    line: ENABLE_TWO_FACTOR_AUTH = True
+    insertafter: FILE_SERVER_ROOT = 'https://{{ fqdn }}/seafhttp'
+
+- name: Add caching config to seahub_settings.py
+  become_user: seafile
+  become: true
+  blockinfile:
+    path: /opt/seafile/conf/seahub_settings.py
+    insertafter: ENABLE_TWO_FACTOR_AUTH = True
+    block: |
+      CACHES = {
+        'default': {
+        'BACKEND': 'django_pylibmc.memcached.PyLibMCCache',
+        'LOCATION': '127.0.0.1:11211',
+        },
+      }
+
+- name: Edit/Create seafile systemd file
+  become: true
+  template:
+    src: seafile.service.j2
+    dest: /etc/systemd/system/seafile.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Edit/Create seahub systemd file
+  become: true
+  template:
+    src: seahub.service.j2
+    dest: /etc/systemd/system/seahub.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: reload systemd daemon
+  become: true
+  systemd:
+    daemon_reload: yes
+
+- name: start+enable seafile service
+  become: true
+  systemd:
+    name: seafile
+    enabled: yes
+    state: started
+
+- name: start+enable seahub service
+  become: true
+  systemd:
+    name: seahub
+    enabled: yes
+    state: started
+
+- name: Edit/Create nginx virtual host config
+  become: true
+  template:
+    src: nginx_seafile.j2
+    dest: /etc/nginx/sites-available/seafile
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Link nginx virtual host config
+  become: true
+  file:
+    src: /etc/nginx/sites-available/seafile
+    dest: /etc/nginx/sites-enabled/seafile
+    owner: root
+    group: root
+    state: link
+
+- name: Restart nginx
+  become: true
+  systemd:
+    name: nginx
+    state: restarted
+
+- name: Firewalld allow http
+  become: true
+  firewalld:
+    service: http
+    permanent: yes
+    state: enabled
+    immediate: yes

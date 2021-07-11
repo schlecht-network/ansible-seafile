@@ -1,0 +1,21 @@
+[General]
+SERVICE_URL = https://{{ fqdn }}/
+
+[Database]
+ENGINE = mysql
+HOST = 127.0.0.1
+PORT = 3306
+USER = seafile
+PASSWD = {{ seafileuser_db_pw }}
+DB = ccnet-db
+CONNECTION_CHARSET = utf8
+
+{% if seafile_ldap_host is defined %}
+[LDAP]
+HOST = {{ seafile_ldap_host }}
+BASE = {{ seafile_ldap_basedn }}
+USER_DN = {{ seafile_ldap_binduser }}
+PASSWORD = {{ seafile_ldap_bindpw }}
+LOGIN_ATTR = {{ seafile_ldap_loginattr }}
+FILTER = {{ seafile_ldap_filter }}
+{% endif %}
